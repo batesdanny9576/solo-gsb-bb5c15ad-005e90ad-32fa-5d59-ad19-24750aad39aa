@@ -7,12 +7,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.assembly import solve_assembly
 from app.batch_identify import resolve_batch_identify
 from app.decision_tree import build_decision_tree
 from app.digest import recommend
 from app.identify import identify
 from app.mixture import resolve_mixture
 from app.models import (
+    AssemblyRequest,
+    AssemblyResponse,
     BatchIdentifyRequest,
     BatchIdentifyResponse,
     DecisionTreeRequest,
@@ -39,6 +42,7 @@ from app.replicate_consistency import assess_replicate_consistency
 from app.size_calibration import calibrate_sizes
 from app.validation import (
     DigestValidationError,
+    validate_assembly_request,
     validate_batch_identify_request,
     validate_decision_tree_request,
     validate_identify_request,
@@ -50,7 +54,7 @@ from app.validation import (
     validate_size_calibration_request,
 )
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 app = FastAPI(
     title="Circular DNA Double-Digest Discrimination Service",
@@ -74,7 +78,11 @@ app = FastAPI(
         "结果与输入顺序无关；还可把标准 ladder 尺寸与 ladder 泳道实测迁移距离"
         "在距离递增、log10(bp) 递减的顺序约束下枚举一对一锚点对齐（允许缺带/杂带），"
         "依次最小化跳过总数、线性回归残差与索引序列，以入选锚点做禁外推的分段线性"
-        "插值，把待测条带迁移距离换算为片段 bp 或标记越界。"
+        "插值，把待测条带迁移距离换算为片段 bp 或标记越界；还可对若干命名片段"
+        "（各带左/右末端：平端或 5' 突出端序列）做环状连接判定：回溯枚举每个片段"
+        "恰用一次、允许正反向放置的全部闭环排列（平端仅与平端相容，5' 突出端仅与"
+        "反向互补序列相容），将循环旋转与整体反向视为同一方案，判定无解、唯一或"
+        "多解，并返回规范化代表方案的逐片段方向与逐连接处相容依据。"
     ),
     version=VERSION,
 )
@@ -205,6 +213,17 @@ async def digest_replicate_consistency(
 async def digest_size_calibration(req: SizeCalibrationRequest) -> SizeCalibrationResponse:
     validate_size_calibration_request(req)
     return calibrate_sizes(req)
+
+
+@app.post(
+    "/api/v1/digest/assembly",
+    response_model=AssemblyResponse,
+    tags=["assembly"],
+    summary="环状 DNA 片段连接判定：回溯枚举全部闭环排列并按旋转/整体反向去重",
+)
+async def digest_assembly(req: AssemblyRequest) -> AssemblyResponse:
+    validate_assembly_request(req)
+    return solve_assembly(req)
 
 
 if __name__ == "__main__":

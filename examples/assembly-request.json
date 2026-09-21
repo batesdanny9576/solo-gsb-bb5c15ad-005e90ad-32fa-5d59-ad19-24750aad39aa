@@ -1,0 +1,19 @@
+{
+  "fragments": [
+    {
+      "name": "alpha",
+      "left_end": {"kind": "blunt"},
+      "right_end": {"kind": "overhang", "sequence": "AATT"}
+    },
+    {
+      "name": "beta",
+      "left_end": {"kind": "overhang", "sequence": "AATT"},
+      "right_end": {"kind": "overhang", "sequence": "ATGC"}
+    },
+    {
+      "name": "gamma",
+      "left_end": {"kind": "overhang", "sequence": "GCAT"},
+      "right_end": {"kind": "blunt"}
+    }
+  ]
+}

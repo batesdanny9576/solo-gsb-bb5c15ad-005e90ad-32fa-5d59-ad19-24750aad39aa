@@ -4,9 +4,10 @@
 （位点越界、重复位点、切点数量等）在 :mod:`app.validation` 中完成，
 两者最终都输出统一结构的 422 响应。
 """
+import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SampleName = Literal["reference", "variant"]
 
@@ -714,3 +715,109 @@ class SizeCalibrationResponse(BaseModel):
     calibration_reason: str = Field(
         description="中文依据：锚点枚举约束、跳过总数/残差/索引序列三级优选、禁外推分段插值规则"
     )
+
+
+# ------------------------------------------------- 环状片段连接判定（assembly）模型
+
+# 5' 突出端序列字符集：仅 A/C/G/T（小写在校验前自动转大写）
+_OVERHANG_PATTERN = re.compile(r"[ACGT]+")
+
+
+class FragmentEndInput(BaseModel):
+    kind: Literal["blunt", "overhang"] = Field(
+        ..., description="末端类型：blunt 平端；overhang 5' 突出端"
+    )
+    sequence: str | None = Field(
+        default=None, min_length=1, max_length=64,
+        description="5' 突出端序列（突出单链自身 5'→3'，仅 A/C/G/T，小写自动转大写）；"
+                    "kind 为 overhang 时必填，kind 为 blunt 时须为 null 或省略",
+    )
+
+    @field_validator("sequence")
+    @classmethod
+    def _normalize_sequence(cls, value: str | None) -> str | None:
+        return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _check_end(self) -> "FragmentEndInput":
+        if self.kind == "overhang":
+            if self.sequence is None:
+                raise ValueError("5' 突出端（overhang）必须给出 sequence（仅 A/C/G/T）")
+            if not _OVERHANG_PATTERN.fullmatch(self.sequence):
+                raise ValueError(
+                    f"5' 突出端序列 {self.sequence!r} 含非 A/C/G/T 字符"
+                )
+        elif self.sequence is not None:
+            raise ValueError("平端（blunt）不应携带 sequence，请置为 null 或省略")
+        return self
+
+
+class AssemblyFragmentInput(BaseModel):
+    name: str = Field(..., min_length=1, description="片段名称，不可重复、不可为空白")
+    left_end: FragmentEndInput = Field(..., description="片段左末端（物理末端）")
+    right_end: FragmentEndInput = Field(..., description="片段右末端（物理末端）")
+
+
+class AssemblyRequest(BaseModel):
+    fragments: list[AssemblyFragmentInput] = Field(
+        ..., min_length=1,
+        description="命名片段列表，名称不可重复，至少 1 个；每个片段在环中恰好使用一次，"
+                    "允许正反向放置",
+    )
+
+
+class AssemblyPlacementOut(BaseModel):
+    position: int = Field(
+        description="在规范化代表方案中的位置，从 1 开始（环形，末位与首位相接）"
+    )
+    name: str = Field(description="片段名称")
+    orientation: Literal["forward", "reverse"] = Field(
+        description="放置方向：forward 左末端朝上游、右末端朝下游；reverse 相反"
+    )
+    upstream_end: Literal["left", "right"] = Field(description="朝向上游连接处的物理末端")
+    downstream_end: Literal["left", "right"] = Field(description="朝向下游连接处的物理末端")
+
+
+class AssemblyJunctionOut(BaseModel):
+    junction_index: int = Field(
+        description="连接处编号，从 1 开始；第 n 个连接为末位片段 → 首位片段（跨接）"
+    )
+    upstream_fragment: str = Field(description="上游片段名")
+    upstream_end: Literal["left", "right"] = Field(description="上游片段参与该连接的物理末端")
+    upstream_end_kind: Literal["blunt", "overhang"]
+    upstream_overhang: str | None = Field(description="上游末端 5' 突出端序列；平端为 null")
+    downstream_fragment: str = Field(description="下游片段名")
+    downstream_end: Literal["left", "right"] = Field(description="下游片段参与该连接的物理末端")
+    downstream_end_kind: Literal["blunt", "overhang"]
+    downstream_overhang: str | None = Field(description="下游末端 5' 突出端序列；平端为 null")
+    compatibility: Literal["blunt_blunt", "overhang_reverse_complement"] = Field(
+        description="相容依据：blunt_blunt 平端-平端；"
+                    "overhang_reverse_complement 两突出端序列互为反向互补"
+    )
+    description: str = Field(description="中文相容依据说明")
+
+
+class AssemblySolutionOut(BaseModel):
+    signature: str = Field(
+        description="规范化签名：片段名+方向（+ 正向 / - 反向）按环形顺序排列"
+    )
+    placements: list[AssemblyPlacementOut] = Field(
+        description="逐位置放置：片段名、方向与朝向各连接处的物理末端"
+    )
+    junctions: list[AssemblyJunctionOut] = Field(
+        description="逐连接处相容依据（数量等于片段数，含末位 → 首位的跨接连接）"
+    )
+
+
+class AssemblyResponse(BaseModel):
+    fragment_count: int = Field(description="请求中的片段数量")
+    solution_count: int = Field(
+        description="去重后的不同方案数（循环旋转 / 整体反向视为同一方案）"
+    )
+    verdict: Literal["no_solution", "unique", "multiple"] = Field(
+        description="判定：no_solution 无解；unique 唯一解；multiple 多解"
+    )
+    solution: AssemblySolutionOut | None = Field(
+        description="规范化代表方案（全部方案中字典序最小者）；无解时为 null"
+    )
+    verdict_reason: str = Field(description="中文判定依据说明")

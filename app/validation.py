@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.models import (
+    AssemblyRequest,
     BatchIdentifyRequest,
     DecisionTreeRequest,
     DigestRequest,
@@ -609,6 +610,46 @@ def validate_batch_identify_request(req: BatchIdentifyRequest) -> BatchIdentifyR
                     f"超过允许上限 {settings.MAX_BANDS}",
                     "too_many_bands",
                 ))
+
+    if errors:
+        raise DigestValidationError(errors)
+    return req
+
+
+def validate_assembly_request(req: AssemblyRequest) -> AssemblyRequest:
+    """assembly 接口的语义校验：片段规模上限与名称唯一性。
+
+    片段列表为空、末端类型非法、突出端缺少序列 / 序列含非 A/C/G/T 字符、
+    平端携带序列等基础字段约束由 Pydantic 模型直接拦截，与此处一样输出
+    统一结构的 422 响应。
+    """
+    errors: list[dict] = []
+
+    if len(req.fragments) > settings.MAX_ASSEMBLY_FRAGMENTS:
+        errors.append(_err(
+            ["fragments"],
+            f"片段数量（{len(req.fragments)}）超过允许上限 "
+            f"{settings.MAX_ASSEMBLY_FRAGMENTS}（需回溯枚举全部排列与正反向放置，"
+            "最坏规模为 (n-1)!·2^(n-1)）",
+            "too_many_assembly_fragments",
+        ))
+
+    seen_names: set[str] = set()
+    for i, fragment in enumerate(req.fragments):
+        name = fragment.name
+        if not name.strip():
+            errors.append(_err(
+                ["fragments", i, "name"],
+                "片段名称不能为空白",
+                "invalid_fragment_name",
+            ))
+        if name in seen_names:
+            errors.append(_err(
+                ["fragments", i, "name"],
+                f"片段名称重复：{name}",
+                "duplicate_fragment_name",
+            ))
+        seen_names.add(name)
 
     if errors:
         raise DigestValidationError(errors)

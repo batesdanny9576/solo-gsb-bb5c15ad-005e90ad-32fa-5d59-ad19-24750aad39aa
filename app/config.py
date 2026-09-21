@@ -45,5 +45,9 @@ class Settings:
         os.getenv("MAX_CALIBRATION_LADDER_BANDS", "16")
     )
 
+    # assembly 接口允许的最大片段数：回溯枚举全部排列与正反向放置，
+    # 最坏规模为 (n-1)!·2^(n-1)（最小名片段固定正向位于位置 0）
+    MAX_ASSEMBLY_FRAGMENTS: int = int(os.getenv("MAX_ASSEMBLY_FRAGMENTS", "8"))
+
 
 settings = Settings()
