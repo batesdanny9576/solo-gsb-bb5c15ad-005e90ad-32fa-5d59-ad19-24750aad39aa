@@ -714,3 +714,84 @@ class SizeCalibrationResponse(BaseModel):
     calibration_reason: str = Field(
         description="中文依据：锚点枚举约束、跳过总数/残差/索引序列三级优选、禁外推分段插值规则"
     )
+
+
+# ------------------------------------------------- 环状片段连接判定（ligation）模型
+
+class FragmentEndInput(BaseModel):
+    type: Literal["blunt", "overhang"] = Field(
+        ..., description="末端类型：blunt 为平端，overhang 为 5' 突出端"
+    )
+    sequence: str | None = Field(
+        default=None, min_length=1,
+        description="5' 突出端序列（突出链 5'→3'，仅 A/C/G/T，不区分大小写，"
+                    "响应中规范化为大写）；type 为 overhang 时必填，为 blunt 时不得提供",
+    )
+
+
+class LigationFragmentInput(BaseModel):
+    name: str = Field(..., min_length=1, description="片段名称，不可重复、不可为空白")
+    left_end: FragmentEndInput = Field(..., description="片段左端末端")
+    right_end: FragmentEndInput = Field(..., description="片段右端末端")
+
+
+class LigationRequest(BaseModel):
+    fragments: list[LigationFragmentInput] = Field(
+        ..., min_length=1,
+        description="命名片段列表：每个片段恰好使用一次、允许正反向放置，至少 1 个",
+    )
+
+
+class LigationEndOut(BaseModel):
+    type: Literal["blunt", "overhang"]
+    sequence: str | None = Field(
+        default=None, description="5' 突出端序列（5'→3'，大写规范化）；平端为 null"
+    )
+
+
+class LigationPlacementOut(BaseModel):
+    position: int = Field(description="片段在代表方案圆环中的位置，从 1 开始")
+    fragment: str = Field(description="片段名")
+    orientation: Literal["forward", "reverse"] = Field(
+        description="放置方向：forward 为按提交方向，reverse 为左右端互换的反向放置"
+    )
+    left_end: LigationEndOut = Field(description="该放置方向下片段的左端")
+    right_end: LigationEndOut = Field(description="该放置方向下片段的右端")
+
+
+class LigationJunctionOut(BaseModel):
+    junction_index: int = Field(
+        description="连接处编号，从 1 开始；最后一个连接处连接末位片段右端与首位片段左端（闭环）"
+    )
+    left_fragment: str = Field(description="连接处左侧片段名（提供其右端）")
+    right_fragment: str = Field(description="连接处右侧片段名（提供其左端）")
+    left_end: LigationEndOut = Field(description="左侧片段的右端")
+    right_end: LigationEndOut = Field(description="右侧片段的左端")
+    compatibility: Literal["blunt_blunt", "overhang_reverse_complement"] = Field(
+        description="相容依据类型：blunt_blunt 平端-平端；"
+                    "overhang_reverse_complement 突出端互为反向互补"
+    )
+    description: str = Field(description="中文相容依据说明")
+
+
+class LigationSolutionOut(BaseModel):
+    placements: list[LigationPlacementOut] = Field(
+        description="规范化代表方案的片段放置（按圆环位置顺序，首位为名称最小片段的正向放置）"
+    )
+    junctions: list[LigationJunctionOut] = Field(
+        description="逐连接处相容依据，数量与片段数相同（闭环）"
+    )
+
+
+class LigationResponse(BaseModel):
+    fragment_count: int = Field(description="请求中的片段数量")
+    verdict: Literal["no_solution", "unique", "multiple"] = Field(
+        description="判定：no_solution 无解；unique 唯一解；multiple 多解"
+    )
+    solution_count: int = Field(
+        description="可闭环排列的等价类数量（循环旋转与整体反向视为同一方案）"
+    )
+    representative: LigationSolutionOut | None = Field(
+        default=None, description="规范化代表方案（全部等价类中字典序最小者）；无解时为 null"
+    )
+    solution_reason: str = Field(description="中文判定依据说明")

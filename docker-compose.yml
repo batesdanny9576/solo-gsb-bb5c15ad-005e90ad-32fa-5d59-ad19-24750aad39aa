@@ -30,6 +30,8 @@ services:
       MAX_REPLICATE_LANES: "32"
       # size-calibration 接口允许的标准 ladder / 实测 ladder 条数上限（锚点对齐枚举保序下标组合）
       MAX_CALIBRATION_LADDER_BANDS: "16"
+      # ligation 接口允许的最大片段数（回溯枚举全部正反向圆环排列，规模为 (n-1)! × 2^(n-1)）
+      MAX_LIGATION_FRAGMENTS: "8"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sys,urllib.request; port=os.getenv('APP_PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=3).status==200 else 1)"]

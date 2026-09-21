@@ -45,5 +45,9 @@ class Settings:
         os.getenv("MAX_CALIBRATION_LADDER_BANDS", "16")
     )
 
+    # ligation 接口允许的最大片段数：需回溯枚举全部正反向圆环排列
+    # （锚定最小名片段后规模为 (n-1)! × 2^(n-1)），随片段数阶乘增长
+    MAX_LIGATION_FRAGMENTS: int = int(os.getenv("MAX_LIGATION_FRAGMENTS", "8"))
+
 
 settings = Settings()

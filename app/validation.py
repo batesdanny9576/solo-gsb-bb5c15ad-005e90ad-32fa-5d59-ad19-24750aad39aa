@@ -3,6 +3,8 @@
 校验失败统一抛出 :class:`DigestValidationError`，由主应用转换为
 统一结构的 HTTP 422 响应（与 Pydantic 字段校验同一响应格式）。
 """
+import re
+
 from fastapi import HTTPException
 
 from app.config import settings
@@ -11,6 +13,7 @@ from app.models import (
     DecisionTreeRequest,
     DigestRequest,
     IdentifyRequest,
+    LigationRequest,
     MixtureRequest,
     PanelRequest,
     PartialFailureRequest,
@@ -608,6 +611,71 @@ def validate_batch_identify_request(req: BatchIdentifyRequest) -> BatchIdentifyR
                     f"{limit_name} {name} 的条带数量（{len(bands)}）"
                     f"超过允许上限 {settings.MAX_BANDS}",
                     "too_many_bands",
+                ))
+
+    if errors:
+        raise DigestValidationError(errors)
+    return req
+
+
+# 5' 突出端序列：仅允许 A/C/G/T（不区分大小写，算法层统一规范化为大写）
+_OVERHANG_PATTERN = re.compile(r"[ACGTacgt]+")
+
+
+def validate_ligation_request(req: LigationRequest) -> LigationRequest:
+    """ligation 接口的语义校验：片段规模/重名/空白名与末端序列合法性。
+
+    片段列表为空、末端类型非法、突出端序列为空串等基础字段约束由 Pydantic
+    模型直接拦截，与此处一样输出统一结构的 422 响应。
+    """
+    errors: list[dict] = []
+
+    if len(req.fragments) > settings.MAX_LIGATION_FRAGMENTS:
+        errors.append(_err(
+            ["fragments"],
+            f"片段数量（{len(req.fragments)}）超过允许上限 "
+            f"{settings.MAX_LIGATION_FRAGMENTS}（需回溯枚举全部正反向圆环排列）",
+            "too_many_ligation_fragments",
+        ))
+
+    seen_names: set[str] = set()
+    for i, fragment in enumerate(req.fragments):
+        name = fragment.name
+        if not name.strip():
+            errors.append(_err(
+                ["fragments", i, "name"],
+                "片段名称不能为空白",
+                "invalid_fragment_name",
+            ))
+        if name in seen_names:
+            errors.append(_err(
+                ["fragments", i, "name"],
+                f"片段名称重复：{name}",
+                "duplicate_fragment_name",
+            ))
+        seen_names.add(name)
+
+        for field, label in (("left_end", "左端"), ("right_end", "右端")):
+            end = getattr(fragment, field)
+            if end.type == "overhang":
+                if end.sequence is None:
+                    errors.append(_err(
+                        ["fragments", i, field, "sequence"],
+                        f"片段 {name} 的{label}为 5' 突出端，必须提供突出端序列",
+                        "missing_overhang_sequence",
+                    ))
+                elif not _OVERHANG_PATTERN.fullmatch(end.sequence):
+                    errors.append(_err(
+                        ["fragments", i, field, "sequence"],
+                        f"片段 {name} 的{label}突出端序列 {end.sequence!r} 含非法字符："
+                        "仅允许 A/C/G/T（不区分大小写）",
+                        "invalid_overhang_sequence",
+                    ))
+            elif end.sequence is not None:
+                errors.append(_err(
+                    ["fragments", i, field, "sequence"],
+                    f"片段 {name} 的{label}为平端，不应提供突出端序列",
+                    "blunt_end_with_sequence",
                 ))
 
     if errors:

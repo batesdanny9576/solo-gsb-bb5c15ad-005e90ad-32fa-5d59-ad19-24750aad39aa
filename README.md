@@ -1,6 +1,6 @@
 # 环状 DNA 双酶切鉴别服务
 
-基于 FastAPI 的圆形（环状）DNA 双酶切鉴别服务，提供九个互补接口：
+基于 FastAPI 的圆形（环状）DNA 双酶切鉴别服务，提供十个互补接口：
 
 - **方案推荐**：客户端提交质粒长度、参考型与变异型的候选酶切位点、最小可见片段长度和条带分辨容差，服务枚举所有不同酶对，按圆环相邻切点计算两种样本的片段长度，将容差内的片段聚为同一条电泳条带，并推荐能够区分两种样本的酶对。
 - **样本鉴别**：客户端提交同一质粒参考型、变异型的预测条带长度和一次凝胶观测长度列表，服务在给定容差内做确定性的一对一最小代价匹配，分别计算两种样本的缺失条带、额外条带与总误差，判定观测样本为参考型、变异型或无法区分。
@@ -11,6 +11,7 @@
 - **部分酶切失败反推**：客户端提交质粒长度、按圆环顺序排列的理论片段（每段长度及其后边界名称）、一次异常凝胶的观测条带、匹配容差与最大失败边界数，服务枚举失败边界数不超过上限的**全部边界子集**；失败（未切开）边界会合并其相邻片段（正确处理连续失败与首尾**跨原点**合并），再复用鉴别接口的一对一条带匹配，按未匹配条带数、总误差、失败边界数、边界名序列依次选出**唯一诊断**，返回合并后预测条带、逐条匹配与失败边界。
 - **凝胶重复一致性**：客户端提交同一样本的若干**命名观测泳道**、条带匹配容差与最少出现次数，服务把全部泳道的条带按（长度、泳道序号）排序做确定性的**全局单连接聚类**，以每簇**中位长度**形成共识谱，逐泳道标记**缺失、额外与低频**条带，并按**共识偏差与异常数**给出稳定性评分，结果与输入顺序无关。
 - **迁移距离分子量校准（size-calibration）**：客户端提交按尺寸降序的标准 ladder 尺寸、ladder 泳道实测迁移距离（可含缺带/杂带）、待测条带距离、最大缺带/杂带数与回归残差阈值，服务在"迁移距离递增、log10(bp) 递减"的顺序约束下枚举全部一对一锚点对齐（允许跳过两侧项目），依次最小化**跳过总数、线性回归 RMSE 与索引序列字典序**，再以入选锚点在距离-log10(bp) 空间做**禁止外推的分段线性插值**，返回锚点对应、缺失标准带、杂带、回归指标与每条待测带的估算 bp 或越界状态。
+- **环状片段连接判定（ligation）**：客户端提交若干**命名片段**及各自左右末端（平端或 5' 突出端序列），服务按"平端仅与平端、突出端仅与反向互补序列相容"的规则，**回溯枚举**每个片段恰好使用一次且允许正反向放置的全部可闭环圆环排列，将**循环旋转与整体反向视为同一方案**，判定**无解、唯一或多解**，并返回规范化代表方案、片段方向与逐连接处相容依据。
 
 **核心功能为纯本地数学计算，不依赖数据库、缓存或任何外部服务。**
 
@@ -55,6 +56,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 部分酶切失败反推 | POST | `http://localhost:8000/api/v1/digest/partial-failure` |
 | 凝胶重复一致性评估 | POST | `http://localhost:8000/api/v1/digest/replicate-consistency` |
 | 迁移距离分子量校准 | POST | `http://localhost:8000/api/v1/digest/size-calibration` |
+| 环状片段连接判定 | POST | `http://localhost:8000/api/v1/digest/ligation` |
 | 交互式 API 文档（Swagger） | GET | `http://localhost:8000/docs` |
 | OpenAPI Schema | GET | `http://localhost:8000/openapi.json` |
 
@@ -62,7 +64,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok","service":"circular-dna-digest","version":"1.8.0"}
+# {"status":"ok","service":"circular-dna-digest","version":"1.9.0"}
 ```
 
 ---
@@ -87,6 +89,7 @@ curl http://localhost:8000/health
 | `MAX_PARTIAL_FAILURE_BOUNDARIES` | `16` | partial-failure 接口允许的最大理论片段（边界）数（需枚举至多 `max_failed_boundaries` 规模的全部边界子集，最坏 2ⁿ） | 编辑 `environment` |
 | `MAX_REPLICATE_LANES` | `32` | replicate-consistency 接口允许的最大泳道数（全局聚类规模为各泳道条带数之和） | 编辑 `environment` |
 | `MAX_CALIBRATION_LADDER_BANDS` | `16` | size-calibration 接口允许的标准 ladder 条数 / ladder 实测距离条数上限（锚点对齐需枚举保序下标组合） | 编辑 `environment` |
+| `MAX_LIGATION_FRAGMENTS` | `8` | ligation 接口允许的最大片段数（回溯枚举全部正反向圆环排列，规模为 (n−1)! × 2ⁿ⁻¹） | 编辑 `environment` |
 
 ---
 
@@ -549,6 +552,74 @@ curl -X POST http://localhost:8000/api/v1/digest/size-calibration \
 - `regression`：回归斜率（负值）、截距、RMSE、R² 与阈值校验结果；`calibration_range_*`：可插值的距离与 bp 闭区间（锚点覆盖范围，范围外不外推）。
 - `sample_bands`：**按请求提交顺序**逐条给出 `calibrated` / `out_of_range_above` / `out_of_range_below` 状态、估算 bp（保留 2 位小数）及插值所用锚点编号（恰在锚点上为单元素列表）。
 
+### 环状 DNA 片段连接判定（POST `/api/v1/digest/ligation`）
+
+#### 请求体（JSON）
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `fragments` | array | 命名片段列表，**至少 1 个**，片段名不可重复、不可为空白，总数不超过 `MAX_LIGATION_FRAGMENTS`（默认 8） |
+| `fragments[].name` | string | 片段名，如 `vector` |
+| `fragments[].left_end` | object | 片段左端末端（结构见下两行） |
+| `fragments[].right_end` | object | 片段右端末端（结构见下两行） |
+| `fragments[].*_end.type` | string | `blunt`（平端）或 `overhang`（5' 突出端） |
+| `fragments[].*_end.sequence` | string | 5' 突出端序列（突出链 5'→3'，仅 A/C/G/T，不区分大小写，响应中规范化为大写）；`overhang` **必填**，`blunt` **不得提供** |
+
+请求示例见 [`examples/ligation-request.json`](examples/ligation-request.json)：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/digest/ligation \
+  -H 'Content-Type: application/json' \
+  -d @examples/ligation-request.json
+```
+
+#### 算法说明（连接判定）
+
+1. **末端相容规则**：连接处两侧末端相容当且仅当 ① 均为**平端**（平端仅与平端相容），或 ② 均为 5' 突出端且序列**互为反向互补**（如 `AAGG` 与 `CCTT`；回文序列如 `AATT` 与自身相容）。平端与突出端之间不相容。片段**反向放置**时其左、右端互换位置；突出端序列是物理末端的属性，不随放置方向改变。
+2. **回溯枚举闭环排列**：每个片段恰好使用一次、可正向或反向放置，回溯搜索全部 n 个连接处（含末位与首位之间的**闭环连接处**）均相容的圆环排列。枚举时把**名称最小的片段固定在首位且正向放置**：任一排列的全体循环旋转与整体反向（2n 个二面体变换，片段名互不相同故两两不同）中恰有一个满足该约束，因此每个等价类（**循环旋转与整体反向视为同一方案**）恰好被枚举一次，`solution_count` 为等价类的**精确**数量。
+3. **判定**：等价类数为 0 / 1 / ≥2 分别判定 `no_solution`（无解）/ `unique`（唯一）/ `multiple`（多解）。
+4. **规范化代表方案**：取全部等价类代表中字典序最小的排列（首位必为名称最小片段的正向放置），与输入提交顺序无关。
+
+#### 响应示例（连接判定）
+
+```json
+{
+  "fragment_count": 3,
+  "verdict": "unique",
+  "solution_count": 1,
+  "representative": {
+    "placements": [
+      {"position": 1, "fragment": "insert-1", "orientation": "forward",
+       "left_end": {"type": "overhang", "sequence": "CCTT"},
+       "right_end": {"type": "overhang", "sequence": "GACT"}},
+      {"position": 2, "fragment": "insert-2", "orientation": "forward",
+       "left_end": {"type": "overhang", "sequence": "AGTC"},
+       "right_end": {"type": "overhang", "sequence": "TTGC"}},
+      {"position": 3, "fragment": "vector", "orientation": "forward",
+       "left_end": {"type": "overhang", "sequence": "GCAA"},
+       "right_end": {"type": "overhang", "sequence": "AAGG"}}
+    ],
+    "junctions": [
+      {"junction_index": 1, "left_fragment": "insert-1", "right_fragment": "insert-2",
+       "left_end": {"type": "overhang", "sequence": "GACT"},
+       "right_end": {"type": "overhang", "sequence": "AGTC"},
+       "compatibility": "overhang_reverse_complement", "description": "…"},
+      {"junction_index": 2, "left_fragment": "insert-2", "right_fragment": "vector", "…": "…"},
+      {"junction_index": 3, "left_fragment": "vector", "right_fragment": "insert-1",
+       "left_end": {"type": "overhang", "sequence": "AAGG"},
+       "right_end": {"type": "overhang", "sequence": "CCTT"},
+       "compatibility": "overhang_reverse_complement", "description": "…闭环连接处…"}
+    ]
+  },
+  "solution_reason": "…恰有 1 个等价类可闭环，判定唯一解。"
+}
+```
+
+- `verdict` / `solution_count`：判定结果与等价类数量；无解时 `representative` 为 `null`。
+- `representative.placements`：代表方案的片段放置——位置（从 1 开始）、片段名、放置方向（`forward` / `reverse`）及该方向下的左右端。
+- `representative.junctions`：**逐连接处相容依据**，数量与片段数相同（最后一个为末位回首位的闭环连接处）：两侧片段名、相接末端、相容类型（`blunt_blunt` / `overhang_reverse_complement`）与中文说明。
+- `solution_reason`：中文判定依据，说明锚定枚举、等价类计数与判定规则，可由响应复算。
+
 ### 拒绝条件（HTTP 422）
 
 以下输入问题整体拒绝，返回统一结构 `{"code":"validation_failed","errors":[...]}`，一次性报告全部错误：
@@ -624,7 +695,14 @@ curl -X POST http://localhost:8000/api/v1/digest/size-calibration \
 - 最优锚点对齐的线性回归 **RMSE 超过 `residual_threshold`**（`residual_threshold_exceeded`）；
 - 任一尺寸 ≤ 0、任一距离为负、列表少于 2 条、上限为负 / 阈值为负或缺失等字段约束错误。
 
-注意：推荐接口中切点不足两个属于**酶对级别**的拒绝（记录在 `rejected_pairs`，HTTP 200），而非请求级别错误；面板接口中某变异型无可用酶对时同样返回 HTTP 200（列入 `uncovered_variants`，不返回部分面板）；批量盲样分配接口中所有候选边都超过未匹配阈值时同样返回 HTTP 200（`assignments` 为空、全部泳道列入 `unassigned_lanes`）；决策树接口中某基因型在某酶对上切点不足 2 个或某酶对对全部基因型签名相同，均属于**酶对级别**结果（空签名 / 列入 `non_discriminating_pairs`，HTTP 200），永远无法区分的基因型列入 `indistinguishable_groups`。
+环状片段连接判定接口（`/api/v1/digest/ligation`）：
+
+- 片段列表为空、片段名**重复**或为空白；
+- 片段数量超过 `MAX_LIGATION_FRAGMENTS`（默认 8）上限；
+- 末端 `type` 非法（仅允许 `blunt` / `overhang`）；`overhang` 末端**缺少序列**或序列含 A/C/G/T 以外字符；`blunt` 末端**提供了序列**；
+- 任一片段缺少左端或右端等字段约束错误。
+
+注意：推荐接口中切点不足两个属于**酶对级别**的拒绝（记录在 `rejected_pairs`，HTTP 200），而非请求级别错误；面板接口中某变异型无可用酶对时同样返回 HTTP 200（列入 `uncovered_variants`，不返回部分面板）；批量盲样分配接口中所有候选边都超过未匹配阈值时同样返回 HTTP 200（`assignments` 为空、全部泳道列入 `unassigned_lanes`）；决策树接口中某基因型在某酶对上切点不足 2 个或某酶对对全部基因型签名相同，均属于**酶对级别**结果（空签名 / 列入 `non_discriminating_pairs`，HTTP 200），永远无法区分的基因型列入 `indistinguishable_groups`；连接判定接口中无解（`no_solution`）与多解（`multiple`）均为正常判定结果（HTTP 200）。
 
 ---
 
@@ -633,7 +711,7 @@ curl -X POST http://localhost:8000/api/v1/digest/size-calibration \
 ```
 .
 ├── app/
-│   ├── main.py          # FastAPI 入口：健康检查、推荐/鉴别/面板/混合/批量分配/决策树/部分失败反推/重复一致性路由、统一 422 处理
+│   ├── main.py          # FastAPI 入口：健康检查、推荐/鉴别/面板/混合/批量分配/决策树/部分失败反推/重复一致性/分子量校准/连接判定路由、统一 422 处理
 │   ├── models.py        # 请求/响应 Pydantic 模型
 │   ├── validation.py    # 越界、重复位点、名称一致性、条带/候选/基因型规模等语义校验
 │   ├── digest.py        # 圆环片段、条带聚类、酶对枚举与排序（纯函数）
@@ -645,6 +723,7 @@ curl -X POST http://localhost:8000/api/v1/digest/size-calibration \
 │   ├── partial_failure.py # 失败边界的圆环片段合并（含连续失败/跨原点）、子集枚举与唯一诊断选定（纯函数）
 │   ├── replicate_consistency.py # 多泳道全局条带聚类、共识谱与逐泳道缺失/额外/低频标记及稳定性评分（纯函数）
 │   ├── size_calibration.py # ladder 锚点保序枚举（跳过数/残差/索引序列三级优选）与禁外推分段线性插值（纯函数）
+│   ├── ligation.py      # 平端/突出端相容规则、锚定回溯枚举闭环排列与无解/唯一/多解判定（纯函数）
 │   └── config.py        # 环境变量配置（均有默认值）
 ├── tests/               # pytest 单元 + API 端到端测试
 ├── examples/request.json
@@ -656,6 +735,7 @@ curl -X POST http://localhost:8000/api/v1/digest/size-calibration \
 ├── examples/partial-failure-request.json
 ├── examples/replicate-consistency-request.json
 ├── examples/size-calibration-request.json
+├── examples/ligation-request.json
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt

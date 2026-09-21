@@ -1,0 +1,19 @@
+{
+  "fragments": [
+    {
+      "name": "vector",
+      "left_end": {"type": "overhang", "sequence": "GCAA"},
+      "right_end": {"type": "overhang", "sequence": "AAGG"}
+    },
+    {
+      "name": "insert-1",
+      "left_end": {"type": "overhang", "sequence": "CCTT"},
+      "right_end": {"type": "overhang", "sequence": "GACT"}
+    },
+    {
+      "name": "insert-2",
+      "left_end": {"type": "overhang", "sequence": "AGTC"},
+      "right_end": {"type": "overhang", "sequence": "TTGC"}
+    }
+  ]
+}
